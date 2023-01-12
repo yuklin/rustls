@@ -76,7 +76,7 @@ pub struct Tls13CipherSuite {
 }
 
 impl Tls13CipherSuite {
-    pub(crate) fn derive_encrypter(&self, secret: &hkdf::Prk) -> Box<dyn MessageEncrypter> {
+    fn derive_encrypter(&self, secret: &hkdf::Prk) -> Box<dyn MessageEncrypter> {
         let key = derive_traffic_key(secret, self.common.aead_algorithm);
         let iv = derive_traffic_iv(secret);
 
@@ -88,7 +88,7 @@ impl Tls13CipherSuite {
 
     /// Derive a `MessageDecrypter` object from the concerned TLS 1.3
     /// cipher suite.
-    pub fn derive_decrypter(&self, secret: &hkdf::Prk) -> Box<dyn MessageDecrypter> {
+    fn derive_decrypter(&self, secret: &hkdf::Prk) -> Box<dyn MessageDecrypter> {
         let key = derive_traffic_key(secret, self.common.aead_algorithm);
         let iv = derive_traffic_iv(secret);
 

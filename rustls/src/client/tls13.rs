@@ -1,5 +1,7 @@
 use crate::check::inappropriate_handshake_message;
-use crate::conn::{CommonState, ConnectionRandoms, Side, State};
+#[cfg(feature = "secret_extraction")]
+use crate::conn::Side;
+use crate::conn::{CommonState, ConnectionRandoms, State};
 use crate::enums::{ProtocolVersion, SignatureScheme};
 use crate::error::Error;
 use crate::hash_hs::{HandshakeHash, HandshakeHashBuffer};
@@ -30,7 +32,7 @@ use crate::tls13::key_schedule::{
 use crate::tls13::Tls13CipherSuite;
 use crate::verify;
 #[cfg(feature = "quic")]
-use crate::{conn::Protocol, msgs::base::PayloadU16, quic};
+use crate::{conn::Protocol, msgs::base::PayloadU16};
 use crate::{sign, KeyLog};
 
 use super::client_conn::ClientConnectionData;
@@ -147,29 +149,13 @@ pub(super) fn handle_server_hello(
     cx.common.check_aligned_handshake()?;
 
     let hash_at_client_recvd_server_hello = transcript.get_current_hash();
-
-    let (key_schedule, client_key, server_key) = key_schedule.derive_handshake_secrets(
+    let key_schedule = key_schedule.update_client_handshake_secrets(
+        cx.data.early_data.is_enabled(),
         hash_at_client_recvd_server_hello,
         &*config.key_log,
         &randoms.client,
+        &mut cx.common,
     );
-
-    // Decrypt with the peer's key, encrypt with our own key
-    cx.common
-        .record_layer
-        .set_message_decrypter(suite.derive_decrypter(&server_key));
-
-    if !cx.data.early_data.is_enabled() {
-        // Set the client encryption key for handshakes if early data is not used
-        cx.common
-            .record_layer
-            .set_message_encrypter(suite.derive_encrypter(&client_key));
-    }
-
-    #[cfg(feature = "quic")]
-    if cx.common.is_quic() {
-        cx.common.quic.hs_secrets = Some(quic::Secrets::new(client_key, server_key, suite, true));
-    }
 
     emit_fake_ccs(&mut sent_tls13_fake_ccs, cx.common);
 
@@ -310,17 +296,12 @@ pub(super) fn derive_early_traffic_secret(
     emit_fake_ccs(sent_tls13_fake_ccs, cx.common);
 
     let client_hello_hash = transcript_buffer.get_hash_given(resuming_suite.hash_algorithm(), &[]);
-    let client_early_traffic_secret =
-        early_key_schedule.client_early_traffic_secret(&client_hello_hash, key_log, client_random);
-    // Set early data encryption key
-    cx.common
-        .record_layer
-        .set_message_encrypter(resuming_suite.derive_encrypter(&client_early_traffic_secret));
-
-    #[cfg(feature = "quic")]
-    if cx.common.is_quic() {
-        cx.common.quic.early_secret = Some(client_early_traffic_secret);
-    }
+    early_key_schedule.update_for_early_traffic(
+        &client_hello_hash,
+        key_log,
+        client_random,
+        &mut cx.common,
+    );
 
     // Now the client can send encrypted early data
     cx.common.early_traffic = true;
@@ -426,12 +407,8 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
 
             if was_early_traffic && !cx.common.early_traffic {
                 // If no early traffic, set the encryption key for handshakes
-                cx.common
-                    .record_layer
-                    .set_message_encrypter(
-                        self.suite
-                            .derive_encrypter(self.key_schedule.client_key()),
-                    );
+                self.key_schedule
+                    .update_encrypter(&mut cx.common);
             }
 
             cx.common.peer_certificates = Some(
@@ -880,12 +857,8 @@ impl State<ClientConnectionData> for ExpectFinished {
             emit_end_of_early_data_tls13(&mut st.transcript, cx.common);
             cx.common.early_traffic = false;
             cx.data.early_data.finished();
-            cx.common
-                .record_layer
-                .set_message_encrypter(
-                    st.suite
-                        .derive_encrypter(st.key_schedule.client_key()),
-                );
+            st.key_schedule
+                .update_encrypter(&mut cx.common);
         }
 
         /* Send our authentication/finished messages.  These are still encrypted
@@ -913,29 +886,21 @@ impl State<ClientConnectionData> for ExpectFinished {
             }
         }
 
-        let (key_schedule_finished, client_key, server_key) = st
+        let key_schedule_finished = st
             .key_schedule
             .into_traffic_with_client_finished_pending(
                 hash_after_handshake,
                 &*st.config.key_log,
                 &st.randoms.client,
+                &mut cx.common,
             );
         let handshake_hash = st.transcript.get_current_hash();
-        let (key_schedule_traffic, verify_data, _) =
-            key_schedule_finished.sign_client_finish(&handshake_hash);
+        let (key_schedule_traffic, verify_data) =
+            key_schedule_finished.sign_client_finish(&handshake_hash, &mut cx.common);
         emit_finished_tls13(&mut st.transcript, verify_data, cx.common);
 
         /* Now move to our application traffic keys. */
         cx.common.check_aligned_handshake()?;
-
-        cx.common
-            .record_layer
-            .set_message_decrypter(st.suite.derive_decrypter(&server_key));
-
-        cx.common
-            .record_layer
-            .set_message_encrypter(st.suite.derive_encrypter(&client_key));
-
         cx.common.start_traffic();
 
         let st = ExpectTraffic {
@@ -951,12 +916,8 @@ impl State<ClientConnectionData> for ExpectFinished {
         };
 
         #[cfg(feature = "quic")]
-        {
-            if cx.common.protocol == Protocol::Quic {
-                cx.common.quic.traffic_secrets =
-                    Some(quic::Secrets::new(client_key, server_key, st.suite, true));
-                return Ok(Box::new(ExpectQuicTraffic(st)));
-            }
+        if cx.common.is_quic() {
+            return Ok(Box::new(ExpectQuicTraffic(st)));
         }
 
         Ok(Box::new(st))
@@ -1084,16 +1045,8 @@ impl ExpectTraffic {
         }
 
         // Update our read-side keys.
-        let new_read_key = self
-            .key_schedule
-            .next_application_traffic_secret(Side::Server);
-        common
-            .record_layer
-            .set_message_decrypter(
-                self.suite
-                    .derive_decrypter(&new_read_key),
-            );
-
+        self.key_schedule
+            .update_decrypter(common);
         Ok(())
     }
 }
@@ -1146,13 +1099,8 @@ impl State<ClientConnectionData> for ExpectTraffic {
         if self.want_write_key_update {
             self.want_write_key_update = false;
             common.send_msg_encrypt(Message::build_key_update_notify().into());
-
-            let write_key = self
-                .key_schedule
-                .next_application_traffic_secret(Side::Client);
-            common
-                .record_layer
-                .set_message_encrypter(self.suite.derive_encrypter(&write_key));
+            self.key_schedule
+                .update_encrypter(common);
         }
     }
 
