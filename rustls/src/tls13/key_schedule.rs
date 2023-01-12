@@ -1,5 +1,5 @@
-use super::Tls13CipherSuite;
-use crate::cipher::{Iv, IvLen};
+use super::{Tls13CipherSuite, Tls13MessageDecrypter, Tls13MessageEncrypter};
+use crate::cipher::{Iv, IvLen, MessageDecrypter, MessageEncrypter};
 use crate::conn::{CommonState, Side};
 use crate::error::Error;
 use crate::msgs::base::PayloadU8;
@@ -107,12 +107,12 @@ impl KeyScheduleEarly {
             Side::Client => {
                 common
                     .record_layer
-                    .set_message_encrypter(self.ks.suite.derive_encrypter(&secret));
+                    .set_message_encrypter(self.ks.derive_encrypter(&secret));
             }
             Side::Server => {
                 common
                     .record_layer
-                    .set_message_decrypter(self.ks.suite.derive_decrypter(&secret));
+                    .set_message_decrypter(self.ks.derive_decrypter(&secret));
             }
         }
 
@@ -184,7 +184,6 @@ impl KeyScheduleHandshakeStart {
             .record_layer
             .set_message_decrypter(
                 new.ks
-                    .suite
                     .derive_decrypter(&new.server_handshake_traffic_secret),
             );
 
@@ -196,7 +195,6 @@ impl KeyScheduleHandshakeStart {
                 .record_layer
                 .set_message_encrypter(
                     new.ks
-                        .suite
                         .derive_encrypter(&new.client_handshake_traffic_secret),
                 );
         }
@@ -220,7 +218,6 @@ impl KeyScheduleHandshakeStart {
             .record_layer
             .set_message_encrypter(
                 new.ks
-                    .suite
                     .derive_encrypter(&new.server_handshake_traffic_secret),
             );
 
@@ -290,7 +287,6 @@ impl KeyScheduleHandshake {
                     .record_layer
                     .set_message_decrypter(
                         self.ks
-                            .suite
                             .derive_decrypter(&self.client_handshake_traffic_secret),
                     );
             }
@@ -299,7 +295,6 @@ impl KeyScheduleHandshake {
                     .record_layer
                     .set_message_decrypter_with_trial_decryption(
                         self.ks
-                            .suite
                             .derive_decrypter(&self.client_handshake_traffic_secret),
                         max_length,
                     );
@@ -312,7 +307,6 @@ impl KeyScheduleHandshake {
             .record_layer
             .set_message_encrypter(
                 self.ks
-                    .suite
                     .derive_encrypter(&self.server_handshake_traffic_secret),
             );
     }
@@ -339,22 +333,21 @@ impl KeyScheduleHandshake {
 
         common
             .record_layer
-            .set_message_encrypter(
-                traffic
-                    .ks
-                    .suite
-                    .derive_encrypter(&write),
-            );
+            .set_message_encrypter(traffic.ks.derive_encrypter(&write));
 
         common
             .record_layer
-            .set_message_decrypter(traffic.ks.suite.derive_decrypter(&read));
+            .set_message_decrypter(traffic.ks.derive_decrypter(&read));
 
         #[cfg(feature = "quic")]
         if common.is_quic() {
             common.quic.traffic_secrets = Some(quic::Secrets::new(
-                traffic.current_client_traffic_secret.clone(),
-                traffic.current_server_traffic_secret.clone(),
+                traffic
+                    .current_client_traffic_secret
+                    .clone(),
+                traffic
+                    .current_server_traffic_secret
+                    .clone(),
                 traffic.ks.suite,
                 false,
             ));
@@ -394,12 +387,7 @@ impl KeyScheduleTrafficWithClientFinishedPending {
 
         common
             .record_layer
-            .set_message_decrypter(
-                traffic
-                    .ks
-                    .suite
-                    .derive_decrypter(secret),
-            );
+            .set_message_decrypter(traffic.ks.derive_decrypter(secret));
     }
 
     pub(crate) fn sign_client_finish(
@@ -416,7 +404,7 @@ impl KeyScheduleTrafficWithClientFinishedPending {
             common
                 .record_layer
                 .set_message_decrypter(
-                    self.traffic.ks.suite.derive_decrypter(
+                    self.traffic.ks.derive_decrypter(
                         &self
                             .traffic
                             .current_client_traffic_secret,
@@ -479,14 +467,14 @@ impl KeyScheduleTraffic {
         let secret = self.next_application_traffic_secret(common.side);
         common
             .record_layer
-            .set_message_encrypter(self.ks.suite.derive_encrypter(&secret));
+            .set_message_encrypter(self.ks.derive_encrypter(&secret));
     }
 
     pub(crate) fn update_decrypter(&mut self, common: &mut CommonState) {
         let secret = self.next_application_traffic_secret(common.side.peer());
         common
             .record_layer
-            .set_message_decrypter(self.ks.suite.derive_decrypter(&secret));
+            .set_message_decrypter(self.ks.derive_decrypter(&secret));
     }
 
     fn next_application_traffic_secret(&mut self, side: Side) -> hkdf::Prk {
@@ -610,6 +598,28 @@ impl KeySchedule {
             current: salt.extract(secret),
             suite,
         }
+    }
+
+    fn derive_encrypter(&self, secret: &hkdf::Prk) -> Box<dyn MessageEncrypter> {
+        let key = derive_traffic_key(secret, self.suite.common.aead_algorithm);
+        let iv = derive_traffic_iv(secret);
+
+        Box::new(Tls13MessageEncrypter {
+            enc_key: aead::LessSafeKey::new(key),
+            iv,
+        })
+    }
+
+    /// Derive a `MessageDecrypter` object from the concerned TLS 1.3
+    /// cipher suite.
+    fn derive_decrypter(&self, secret: &hkdf::Prk) -> Box<dyn MessageDecrypter> {
+        let key = derive_traffic_key(secret, self.suite.common.aead_algorithm);
+        let iv = derive_traffic_iv(secret);
+
+        Box::new(Tls13MessageDecrypter {
+            dec_key: aead::LessSafeKey::new(key),
+            iv,
+        })
     }
 
     #[inline]
@@ -805,14 +815,14 @@ impl From<hkdf::Okm<'_, PayloadU8Len>> for PayloadU8 {
     }
 }
 
-pub(crate) fn derive_traffic_key(
+fn derive_traffic_key(
     secret: &hkdf::Prk,
     aead_algorithm: &'static aead::Algorithm,
 ) -> aead::UnboundKey {
     hkdf_expand(secret, aead_algorithm, b"key", &[])
 }
 
-pub(crate) fn derive_traffic_iv(secret: &hkdf::Prk) -> Iv {
+fn derive_traffic_iv(secret: &hkdf::Prk) -> Iv {
     hkdf_expand(secret, IvLen, b"iv", &[])
 }
 
