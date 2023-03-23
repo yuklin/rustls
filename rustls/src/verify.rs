@@ -251,9 +251,8 @@ pub trait ClientCertVerifier: Send + Sync {
     /// [`CertificateRequest`]: https://datatracker.ietf.org/doc/html/rfc8446#section-4.3.2
     /// [`certificate_authorities`]: https://datatracker.ietf.org/doc/html/rfc8446#section-4.2.4
     ///
-    /// Return an empty `Vec` to continue the handshake without sending a
-    /// CertificateRequest message.
-    fn client_auth_root_subjects(&self) -> Vec<DistinguishedName>;
+    /// If the return value is empty, no CertificateRequest message will be sent.
+    fn client_auth_root_subjects(&self) -> &[DistinguishedName];
 
     /// Verify the end-entity certificate `end_entity` is valid, acceptable,
     /// and chains to at least one of the trust anchors trusted by
@@ -573,8 +572,8 @@ impl ClientCertVerifier for AllowAnyAuthenticatedClient {
     }
 
     #[allow(deprecated)]
-    fn client_auth_root_subjects(&self) -> Vec<DistinguishedName> {
-        self.subjects.clone()
+    fn client_auth_root_subjects(&self) -> &[DistinguishedName] {
+        &self.subjects
     }
 
     fn verify_client_cert(
@@ -641,7 +640,7 @@ impl ClientCertVerifier for AllowAnyAnonymousOrAuthenticatedClient {
         false
     }
 
-    fn client_auth_root_subjects(&self) -> Vec<DistinguishedName> {
+    fn client_auth_root_subjects(&self) -> &[DistinguishedName] {
         self.inner.client_auth_root_subjects()
     }
 
@@ -691,7 +690,7 @@ impl ClientCertVerifier for NoClientAuth {
         false
     }
 
-    fn client_auth_root_subjects(&self) -> Vec<DistinguishedName> {
+    fn client_auth_root_subjects(&self) -> &[DistinguishedName] {
         unimplemented!();
     }
 
