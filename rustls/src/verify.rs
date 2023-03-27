@@ -551,7 +551,7 @@ impl AllowAnyAuthenticatedClient {
             subjects: roots
                 .roots
                 .iter()
-                .map(|r| DistinguishedName::from(r.subject().to_vec()))
+                .map(|r| r.subject().clone())
                 .collect::<Vec<_>>(),
             roots,
         }
@@ -615,7 +615,7 @@ impl AllowAnyAnonymousOrAuthenticatedClient {
                 subjects: roots
                     .roots
                     .iter()
-                    .map(|r| DistinguishedName::from(r.subject().to_vec()))
+                    .map(|r| r.subject().clone())
                     .collect::<Vec<_>>(),
                 roots,
             },
