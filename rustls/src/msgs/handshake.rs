@@ -1749,27 +1749,36 @@ impl TlsListElement for ClientCertificateType {
 /// }
 /// ```
 #[derive(Clone, Debug)]
-pub struct DistinguishedName(PayloadU16);
+pub struct DistinguishedName {
+    outer: Vec<u8>,
+}
 
-impl From<Vec<u8>> for DistinguishedName {
-    fn from(v: Vec<u8>) -> Self {
-        Self(PayloadU16::new(v))
+impl DistinguishedName {
+    pub(crate) fn new(inner: &[u8]) -> Self {
+        let mut outer = Vec::with_capacity(2 + inner.len());
+        outer.extend((inner.len() as u16).to_be_bytes());
+        outer.extend(inner);
+        Self { outer }
     }
 }
 
 impl AsRef<[u8]> for DistinguishedName {
     fn as_ref(&self) -> &[u8] {
-        self.0 .0.as_slice()
+        &self.outer[..]
     }
 }
 
 impl Codec for DistinguishedName {
     fn encode(&self, bytes: &mut Vec<u8>) {
-        self.0.encode(bytes);
+        bytes.extend(&self.outer);
     }
 
     fn read(r: &mut Reader) -> Result<Self, InvalidMessage> {
-        Ok(Self(PayloadU16::read(r)?))
+        let len = u16::read(r)? as usize;
+        let mut sub = r.sub(len)?;
+        Ok(Self {
+            outer: sub.rest().to_vec(),
+        })
     }
 }
 

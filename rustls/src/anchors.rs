@@ -41,7 +41,7 @@ impl OwnedTrustAnchor {
         name_constraints: Option<impl Into<Vec<u8>>>,
     ) -> Self {
         Self {
-            subject: DistinguishedName::from(subject.into()),
+            subject: DistinguishedName::new(&subject.into()),
             spki: spki.into(),
             name_constraints: name_constraints.map(|x| x.into()),
         }
@@ -143,5 +143,18 @@ impl RootCertStore {
         );
 
         (valid_count, invalid_count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn owned_trust_anchor_subject_is_correctly_encoding_dn() {
+        let ota = super::OwnedTrustAnchor::from_subject_spki_name_constraints(
+            b"subject".to_owned(),
+            b"".to_owned(),
+            None::<Vec<u8>>,
+        );
+        assert_eq!(ota.subject().as_ref(), b"\x30\x07subject");
     }
 }
