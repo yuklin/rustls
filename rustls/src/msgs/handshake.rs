@@ -1736,22 +1736,42 @@ impl TlsListElement for ClientCertificateType {
     const SIZE_LEN: ListLength = ListLength::U8;
 }
 
-wrapped_payload!(
-    /// A `DistinguishedName` is a `Vec<u8>` wrapped in internal types.
-    ///
-    /// It contains the DER or BER encoded [`Subject` field from RFC 5280](https://datatracker.ietf.org/doc/html/rfc5280#section-4.1.2.6)
-    /// for a single certificate. The Subject field is [encoded as an RFC 5280 `Name`](https://datatracker.ietf.org/doc/html/rfc5280#page-116).
-    /// It can be decoded using [x509-parser's FromDer trait](https://docs.rs/x509-parser/latest/x509_parser/prelude/trait.FromDer.html).
-    ///
-    /// ```ignore
-    /// for name in distinguished_names {
-    ///     use x509_parser::prelude::FromDer;
-    ///     println!("{}", x509_parser::x509::X509Name::from_der(&name.0)?.1);
-    /// }
-    /// ```
-    DistinguishedName,
-    PayloadU16,
-);
+/// A `DistinguishedName` is a `Vec<u8>` wrapped in internal types.
+///
+/// It contains the DER or BER encoded [`Subject` field from RFC 5280](https://datatracker.ietf.org/doc/html/rfc5280#section-4.1.2.6)
+/// for a single certificate. The Subject field is [encoded as an RFC 5280 `Name`](https://datatracker.ietf.org/doc/html/rfc5280#page-116).
+/// It can be decoded using [x509-parser's FromDer trait](https://docs.rs/x509-parser/latest/x509_parser/prelude/trait.FromDer.html).
+///
+/// ```ignore
+/// for name in distinguished_names {
+///     use x509_parser::prelude::FromDer;
+///     println!("{}", x509_parser::x509::X509Name::from_der(&name.0)?.1);
+/// }
+/// ```
+#[derive(Clone, Debug)]
+pub struct DistinguishedName(PayloadU16);
+
+impl From<Vec<u8>> for DistinguishedName {
+    fn from(v: Vec<u8>) -> Self {
+        Self(PayloadU16::new(v))
+    }
+}
+
+impl AsRef<[u8]> for DistinguishedName {
+    fn as_ref(&self) -> &[u8] {
+        self.0 .0.as_slice()
+    }
+}
+
+impl Codec for DistinguishedName {
+    fn encode(&self, bytes: &mut Vec<u8>) {
+        self.0.encode(bytes);
+    }
+
+    fn read(r: &mut Reader) -> Result<Self, InvalidMessage> {
+        Ok(Self(PayloadU16::read(r)?))
+    }
+}
 
 impl TlsListElement for DistinguishedName {
     const SIZE_LEN: ListLength = ListLength::U16;
