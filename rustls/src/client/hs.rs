@@ -280,13 +280,29 @@ fn emit_client_hello_for_retry(
         .map(ClientExtension::get_type)
         .collect();
 
-    let mut cipher_suites: Vec<_> = config
-        .cipher_suites
-        .iter()
-        .map(|cs| cs.suite())
-        .collect();
-    // We don't do renegotiation at all, in fact.
-    cipher_suites.push(CipherSuite::TLS_EMPTY_RENEGOTIATION_INFO_SCSV);
+    let mut cipher_suites: Vec<CipherSuite> = Vec::new();
+    if config.custom_cipher_suites.is_none() {
+        for suite in config.cipher_suites.iter() {
+            cipher_suites.push(suite.suite());
+        }
+        cipher_suites.push(CipherSuite::TLS_EMPTY_RENEGOTIATION_INFO_SCSV);
+    } else {
+        for suite in config
+            .custom_cipher_suites
+            .unwrap()
+            .iter()
+        {
+            cipher_suites.push((*suite).clone());
+        }
+    }
+
+    //let mut cipher_suites: Vec<_> = config
+    //    .cipher_suites
+    //    .iter()
+    //    .map(|cs| cs.suite())
+    //    .collect();
+    //// We don't do renegotiation at all, in fact.
+    //cipher_suites.push(CipherSuite::TLS_EMPTY_RENEGOTIATION_INFO_SCSV);
 
     let mut chp = HandshakeMessagePayload {
         typ: HandshakeType::ClientHello,
