@@ -289,10 +289,10 @@ fn emit_client_hello_for_retry(
     } else {
         for suite in config
             .custom_cipher_suites
+            .as_ref()
             .unwrap()
-            .iter()
         {
-            cipher_suites.push((*suite).clone());
+            cipher_suites.push(suite.clone());
         }
     }
 
