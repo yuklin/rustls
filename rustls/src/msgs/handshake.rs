@@ -554,6 +554,7 @@ pub enum ClientExtension {
     SupportedVersions(Vec<ProtocolVersion>),
     KeyShare(Vec<KeyShareEntry>),
     PresharedKeyModes(Vec<PSKKeyExchangeMode>),
+    CompressCertificate(PayloadU8),
     PresharedKey(PresharedKeyOffer),
     Cookie(PayloadU16),
     ExtendedMasterSecretRequest,
@@ -561,6 +562,8 @@ pub enum ClientExtension {
     SignedCertificateTimestampRequest,
     TransportParameters(Vec<u8>),
     TransportParametersDraft(Vec<u8>),
+    ApplicationSettings(PayloadU8),
+    RenegotiationInfo(PayloadU8),
     EarlyData,
     Unknown(UnknownExtension),
 }
@@ -578,12 +581,15 @@ impl ClientExtension {
             Self::KeyShare(_) => ExtensionType::KeyShare,
             Self::PresharedKeyModes(_) => ExtensionType::PSKKeyExchangeModes,
             Self::PresharedKey(_) => ExtensionType::PreSharedKey,
+            Self::CompressCertificate(_) => ExtensionType::CompressedCertAlgs,
             Self::Cookie(_) => ExtensionType::Cookie,
             Self::ExtendedMasterSecretRequest => ExtensionType::ExtendedMasterSecret,
             Self::CertificateStatusRequest(_) => ExtensionType::StatusRequest,
             Self::SignedCertificateTimestampRequest => ExtensionType::SCT,
             Self::TransportParameters(_) => ExtensionType::TransportParameters,
             Self::TransportParametersDraft(_) => ExtensionType::TransportParametersDraft,
+            Self::ApplicationSettings(_) => ExtensionType::ApplicationSettings,
+            Self::RenegotiationInfo(_) => ExtensionType::RenegotiationInfo,
             Self::EarlyData => ExtensionType::EarlyData,
             Self::Unknown(ref r) => r.typ,
         }
@@ -610,11 +616,14 @@ impl Codec for ClientExtension {
             Self::KeyShare(ref r) => r.encode(&mut sub),
             Self::PresharedKeyModes(ref r) => r.encode(&mut sub),
             Self::PresharedKey(ref r) => r.encode(&mut sub),
+            Self::CompressCertificate(ref r) => r.encode(&mut sub),
             Self::Cookie(ref r) => r.encode(&mut sub),
             Self::CertificateStatusRequest(ref r) => r.encode(&mut sub),
             Self::TransportParameters(ref r) | Self::TransportParametersDraft(ref r) => {
                 sub.extend_from_slice(r);
             }
+            Self::ApplicationSettings(ref r) => r.encode(&mut sub),
+            Self::RenegotiationInfo(ref r) => r.encode(&mut sub),
             Self::Unknown(ref r) => r.encode(&mut sub),
         }
 

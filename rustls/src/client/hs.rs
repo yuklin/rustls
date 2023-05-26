@@ -9,7 +9,7 @@ use crate::hash_hs::HandshakeHashBuffer;
 use crate::kx;
 #[cfg(feature = "logging")]
 use crate::log::{debug, trace};
-use crate::msgs::base::Payload;
+use crate::msgs::base::{Payload, PayloadU8};
 use crate::msgs::enums::{Compression, ExtensionType};
 use crate::msgs::enums::{ECPointFormat, PSKKeyExchangeMode};
 use crate::msgs::handshake::ConvertProtocolNameList;
@@ -214,62 +214,189 @@ fn emit_client_hello_for_retry(
     // should be unreachable thanks to config builder
     assert!(!supported_versions.is_empty());
 
-    let mut exts = vec![
-        ClientExtension::SupportedVersions(supported_versions),
-        ClientExtension::ECPointFormats(ECPointFormat::SUPPORTED.to_vec()),
-        ClientExtension::NamedGroups(
-            config
-                .kx_groups
-                .iter()
-                .map(|skxg| skxg.name)
-                .collect(),
-        ),
-        ClientExtension::SignatureAlgorithms(
-            config
-                .verifier
-                .supported_verify_schemes(),
-        ),
-        ClientExtension::ExtendedMasterSecretRequest,
-        ClientExtension::CertificateStatusRequest(CertificateStatusRequest::build_ocsp()),
-    ];
+    let mut exts: Vec<ClientExtension> = Vec::new();
 
-    if let (Some(sni_name), true) = (input.server_name.for_sni(), config.enable_sni) {
-        exts.push(ClientExtension::make_sni(sni_name));
+    //EnumName: ExtensionType;
+    //EnumVal{
+    //    ServerName => 0x0000,
+    //    MaxFragmentLength => 0x0001,
+    //    ClientCertificateUrl => 0x0002,
+    //    TrustedCAKeys => 0x0003,
+    //    TruncatedHMAC => 0x0004,
+    //    StatusRequest => 0x0005,
+    //    UserMapping => 0x0006,
+    //    ClientAuthz => 0x0007,
+    //    ServerAuthz => 0x0008,
+    //    CertificateType => 0x0009,
+    //    EllipticCurves => 0x000a,
+    //    ECPointFormats => 0x000b,
+    //    SRP => 0x000c,
+    //    SignatureAlgorithms => 0x000d,
+    //    UseSRTP => 0x000e,
+    //    Heartbeat => 0x000f,
+    //    ALProtocolNegotiation => 0x0010,
+    //    SCT => 0x0012,
+    //    Padding => 0x0015,
+    //    ExtendedMasterSecret => 0x0017,
+    //    SessionTicket => 0x0023,
+    //    PreSharedKey => 0x0029,
+    //    EarlyData => 0x002a,
+    //    SupportedVersions => 0x002b,
+    //    Cookie => 0x002c,
+    //    PSKKeyExchangeModes => 0x002d,
+    //    TicketEarlyDataInfo => 0x002e,
+    //    CertificateAuthorities => 0x002f,
+    //    OIDFilters => 0x0030,
+    //    PostHandshakeAuth => 0x0031,
+    //    SignatureAlgorithmsCert => 0x0032,
+    //    KeyShare => 0x0033,
+    //    TransportParameters => 0x0039,
+    //    NextProtocolNegotiation => 0x3374,
+    //    ChannelId => 0x754f,
+    //    RenegotiationInfo => 0xff01,
+    //    TransportParametersDraft => 0xffa5
+
+    if config.custom_extensions.is_some() {
+        for fp in config
+            .custom_extensions
+            .as_ref()
+            .unwrap()
+            .split('-')
+        {
+            let ext = match fp {
+                "0" => {
+                    if let (Some(sni_name), true) = (input.server_name.for_sni(), config.enable_sni)
+                    {
+                        ClientExtension::make_sni(sni_name)
+                    } else {
+                        continue;
+                    }
+                }
+                "5" => {
+                    ClientExtension::CertificateStatusRequest(CertificateStatusRequest::build_ocsp())
+                }
+
+                "10" => ClientExtension::NamedGroups(
+                    config
+                        .kx_groups
+                        .iter()
+                        .map(|skxg| skxg.name)
+                        .collect(),
+                ),
+                "11" => ClientExtension::ECPointFormats(ECPointFormat::SUPPORTED.to_vec()),
+                "13" => ClientExtension::SignatureAlgorithms(
+                    config
+                        .verifier
+                        .supported_verify_schemes(),
+                ),
+
+                "16" => {
+                    if !config.alpn_protocols.is_empty() {
+                        ClientExtension::Protocols(Vec::from_slices(
+                            &config
+                                .alpn_protocols
+                                .iter()
+                                .map(|proto| &proto[..])
+                                .collect::<Vec<_>>(),
+                        ))
+                    } else {
+                        continue;
+                    }
+                }
+                "18" => ClientExtension::SignedCertificateTimestampRequest,
+                "23" => ClientExtension::ExtendedMasterSecretRequest,
+                "27" => ClientExtension::CompressCertificate(PayloadU8::new(vec![])),
+
+                "35" => ClientExtension::SessionTicket(ClientSessionTicket::Request),
+                "43" => ClientExtension::SupportedVersions(supported_versions.clone()),
+                "45" => {
+                    if support_tls13 {
+                        let psk_modes = vec![PSKKeyExchangeMode::PSK_DHE_KE];
+                        ClientExtension::PresharedKeyModes(psk_modes)
+                    } else {
+                        continue;
+                    }
+                }
+                "51" => {
+                    if let Some(key_share) = &key_share {
+                        debug_assert!(support_tls13);
+                        let key_share =
+                            KeyShareEntry::new(key_share.group(), key_share.pubkey.as_ref());
+                        ClientExtension::KeyShare(vec![key_share])
+                    } else {
+                        continue;
+                    }
+                }
+                "17513" => ClientExtension::ApplicationSettings(PayloadU8::new(vec![])),
+                "65281" => ClientExtension::RenegotiationInfo(PayloadU8::new(vec![])),
+
+                _ => {
+                    debug!("unknown finger print: {}", fp);
+                    continue;
+                }
+            };
+            exts.push(ext);
+        }
+
+        exts.extend(extra_exts.iter().cloned());
+    } else {
+        exts.append(&mut vec![
+            ClientExtension::SupportedVersions(supported_versions),
+            ClientExtension::ECPointFormats(ECPointFormat::SUPPORTED.to_vec()),
+            ClientExtension::NamedGroups(
+                config
+                    .kx_groups
+                    .iter()
+                    .map(|skxg| skxg.name)
+                    .collect(),
+            ),
+            ClientExtension::SignatureAlgorithms(
+                config
+                    .verifier
+                    .supported_verify_schemes(),
+            ),
+            ClientExtension::ExtendedMasterSecretRequest,
+            ClientExtension::CertificateStatusRequest(CertificateStatusRequest::build_ocsp()),
+        ]);
+
+        if let (Some(sni_name), true) = (input.server_name.for_sni(), config.enable_sni) {
+            exts.push(ClientExtension::make_sni(sni_name));
+        }
+
+        if may_send_sct_list {
+            exts.push(ClientExtension::SignedCertificateTimestampRequest);
+        }
+
+        if let Some(key_share) = &key_share {
+            debug_assert!(support_tls13);
+            let key_share = KeyShareEntry::new(key_share.group(), key_share.pubkey.as_ref());
+            exts.push(ClientExtension::KeyShare(vec![key_share]));
+        }
+
+        if let Some(cookie) = retryreq.and_then(HelloRetryRequest::get_cookie) {
+            exts.push(ClientExtension::Cookie(cookie.clone()));
+        }
+
+        if support_tls13 {
+            // We could support PSK_KE here too. Such connections don't
+            // have forward secrecy, and are similar to TLS1.2 resumption.
+            let psk_modes = vec![PSKKeyExchangeMode::PSK_DHE_KE];
+            exts.push(ClientExtension::PresharedKeyModes(psk_modes));
+        }
+
+        if !config.alpn_protocols.is_empty() {
+            exts.push(ClientExtension::Protocols(Vec::from_slices(
+                &config
+                    .alpn_protocols
+                    .iter()
+                    .map(|proto| &proto[..])
+                    .collect::<Vec<_>>(),
+            )));
+        }
+
+        // Extra extensions must be placed before the PSK extension
+        exts.extend(extra_exts.iter().cloned());
     }
-
-    if may_send_sct_list {
-        exts.push(ClientExtension::SignedCertificateTimestampRequest);
-    }
-
-    if let Some(key_share) = &key_share {
-        debug_assert!(support_tls13);
-        let key_share = KeyShareEntry::new(key_share.group(), key_share.pubkey.as_ref());
-        exts.push(ClientExtension::KeyShare(vec![key_share]));
-    }
-
-    if let Some(cookie) = retryreq.and_then(HelloRetryRequest::get_cookie) {
-        exts.push(ClientExtension::Cookie(cookie.clone()));
-    }
-
-    if support_tls13 {
-        // We could support PSK_KE here too. Such connections don't
-        // have forward secrecy, and are similar to TLS1.2 resumption.
-        let psk_modes = vec![PSKKeyExchangeMode::PSK_DHE_KE];
-        exts.push(ClientExtension::PresharedKeyModes(psk_modes));
-    }
-
-    if !config.alpn_protocols.is_empty() {
-        exts.push(ClientExtension::Protocols(Vec::from_slices(
-            &config
-                .alpn_protocols
-                .iter()
-                .map(|proto| &proto[..])
-                .collect::<Vec<_>>(),
-        )));
-    }
-
-    // Extra extensions must be placed before the PSK extension
-    exts.extend(extra_exts.iter().cloned());
 
     // Do we have a SessionID or ticket cached for this host?
     let tls13_session = prepare_resumption(&input.resuming, &mut exts, suite, cx, config);

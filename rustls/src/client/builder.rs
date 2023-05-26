@@ -174,6 +174,7 @@ impl ConfigBuilder<ClientConfig, WantsClientCert> {
         ClientConfig {
             cipher_suites: self.state.cipher_suites,
             custom_cipher_suites: None,
+            custom_extensions: None,
             kx_groups: self.state.kx_groups,
             alpn_protocols: Vec::new(),
             resumption: Resumption::default(),

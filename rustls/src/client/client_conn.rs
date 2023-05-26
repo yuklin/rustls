@@ -129,6 +129,9 @@ pub struct ClientConfig {
     /// List of custom ciphersuites, in preference order.
     pub custom_cipher_suites: Option<Vec<CipherSuite>>,
 
+    /// List of custom extensions to send to the server.
+    pub custom_extensions: Option<String>,
+
     /// List of supported key exchange algorithms, in preference order -- the
     /// first element is the highest priority.
     ///
